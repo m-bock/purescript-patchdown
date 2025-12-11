@@ -350,11 +350,15 @@ summarizeLineRanges = foldl
 mkFileLink :: FilePath -> Maybe LineRange -> String
 mkFileLink filePath lr =
   let
-    rangePart = case lr of
+    rangePartLink = case lr of
       Just { lineStart, lineEnd } -> "#L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
       Nothing -> ""
+
+    rangePartLabel = case lr of
+      Just { lineStart, lineEnd } -> " L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
+      Nothing -> ""
   in
-    "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePart <> "\">" <> filePath <> "</a></sup></p>"
+    "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a></sup></p>"
 
 --- Codecs
 

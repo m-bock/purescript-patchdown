@@ -25,6 +25,7 @@ import Data.String.Regex.Flags as RegFlags
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
 import Effect.Class (class MonadEffect, liftEffect)
+import Effect.Class.Console (log)
 import Effect.Exception (Error, error, message)
 import Effect.Ref as Ref
 import Effect.Uncurried (EffectFn2, EffectFn5, mkEffectFn2, runEffectFn5)
@@ -196,6 +197,7 @@ main = do
   { countErrors } <- run opts
 
   unless (countErrors == 0) do
+    log $ "errors found: " <> show countErrors
     Process.exit' 1
 
 -- Markdown
