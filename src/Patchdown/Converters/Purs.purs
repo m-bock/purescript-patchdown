@@ -300,7 +300,7 @@ getWrapFn { split, inline } =
     wrapFn = if inline then mdTicks else mdCodeBlock "purescript"
   in
     { wrapInner: if split then wrapFn else identity
-    , wrapOuter: wrapNl <<< wrapNl <<< if split then identity else wrapFn
+    , wrapOuter: if split then identity else wrapFn
     }
 
 convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
@@ -324,7 +324,13 @@ convert cache { opts: opts@{ pick } } = do
         pure $ map (addPrefix <<< wrapInner) results
     )
 
-  pure $ wrapOuter (Str.joinWith "\n" items)
+  pure $ wrapNl $ wrapNl $ addFileLink opts.filePath $ wrapOuter (Str.joinWith "\n" items)
+
+addFileLink :: Maybe String -> String -> String
+addFileLink filePath content =
+  case filePath of
+    Just fp -> content <> "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> fp <> "\">" <> fp <> "</a></sup></p>"
+    Nothing -> content
 
 --- Codecs
 
