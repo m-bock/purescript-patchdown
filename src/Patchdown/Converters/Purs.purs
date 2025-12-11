@@ -10,6 +10,7 @@ import Control.Monad.Writer (WriterT, runWriterT)
 import Control.Monad.Writer.Class (tell)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Encode.Class (class EncodeJson, encodeJson)
+import Data.Array (mapMaybe)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
 import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError)
@@ -39,12 +40,13 @@ import Foreign.Object (Object)
 import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
+import Node.Path (FilePath)
 import Patchdown.Common (ConvertError, Converter, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
 import Prim.Row (class Cons, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
-import PureScript.CST.Range (class TokensOf, tokensOf)
+import PureScript.CST.Range (class RangeOf, class TokensOf, rangeOf, tokensOf)
 import PureScript.CST.Range.TokenList (TokenList)
 import PureScript.CST.Range.TokenList as TokenList
 import PureScript.CST.Types as CST
@@ -209,22 +211,22 @@ getNames =
     )
     mempty
 
-matchOnePick :: Pick -> Source -> Array String
+matchOnePick :: Pick -> Source -> Array { content :: String, lineRange :: LineRange }
 matchOnePick pick decl = case pick of
   PickImport _ -> []
   PickData { name } -> case decl of
     SrcDecl all@(CST.DeclData r _)
-      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
+      | name == getNameProper r.name -> [ printTokens all # addContent "\n" ]
     _ -> []
 
   PickNewtype { name } -> case decl of
     SrcDecl all@(CST.DeclNewtype r _ _ _)
-      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
+      | name == getNameProper r.name -> [ printTokens all # addContent "\n" ]
     _ -> []
 
   PickType { name } -> case decl of
     SrcDecl all@(CST.DeclType r _ _)
-      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
+      | name == getNameProper r.name -> [ printTokens all # addContent "\n" ]
     _ -> []
 
   PickSignature { name } -> case decl of
@@ -233,18 +235,18 @@ matchOnePick pick decl = case pick of
     _ -> []
 
   PickForeignValue { name, stripImport } -> case decl of
-    SrcDecl (CST.DeclForeign v1 v2 v3@(CST.ForeignValue (CST.Labeled r)))
+    SrcDecl all@(CST.DeclForeign v1 v2 v3@(CST.ForeignValue (CST.Labeled r)))
       | name == getNameIdent r.label ->
           [ ( if stripImport then printTokens v3
-              else printTokenList $ (TokenList.fromArray [ v1, v2 ] <> tokensOf v3)
+              else printTokens all
             )
-              <> "\n"
+              # addContent "\n"
           ]
     _ -> []
 
   PickValue { name } -> case decl of
     SrcDecl all@(CST.DeclValue r)
-      | name == getNameIdent r.name -> [ printTokens all <> "\n" ]
+      | name == getNameIdent r.name -> [ printTokens all # addContent "\n" ]
     _ -> []
 
   PickExtraTypeRecord { name } -> [] -- TODO3
@@ -275,7 +277,7 @@ matchOnePick pick decl = case pick of
       ]
       decl
 
-matchManyPicks :: Array Pick -> Source -> Array String
+matchManyPicks :: Array Pick -> Source -> Array { content :: String, lineRange :: LineRange }
 matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 
 mkConverterPurs :: Effect Converter
@@ -307,7 +309,7 @@ convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect Stri
 convert cache { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
-  items :: (Array String) <- join <$> for pick
+  items :: (Array { lineRange :: Maybe LineRange, content :: String }) <- for pick
     ( \{ pick, filePath, prefix } -> do
         sources <- liftEffect $ cache.getCst (fromMaybe "src/Main.purs" (filePath <|> opts.filePath))
         let results = sources >>= matchOnePick pick
@@ -321,16 +323,38 @@ convert cache { opts: opts@{ pick } } = do
             Just p -> (p <> val)
             Nothing -> val
 
-        pure $ map (addPrefix <<< wrapInner) results
+          items = map (addPrefix <<< wrapInner) (map _.content results)
+
+          lineRange = summarizeLineRanges (map _.lineRange results)
+
+        pure { lineRange, content: Str.joinWith "\n" items }
     )
 
-  pure $ wrapNl $ wrapNl $ addFileLink opts.filePath $ wrapOuter (Str.joinWith "\n" items)
+  let
+    lineRange = summarizeLineRanges (mapMaybe _.lineRange items)
+    items' = map _.content items
+    addFileLink c = case opts.filePath of
+      Just filePath -> c <> mkFileLink filePath lineRange
+      Nothing -> c
 
-addFileLink :: Maybe String -> String -> String
-addFileLink filePath content =
-  case filePath of
-    Just fp -> content <> "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> fp <> "\">" <> fp <> "</a></sup></p>"
-    Nothing -> content
+  pure $ addFileLink $ wrapNl $ wrapNl $ wrapOuter (Str.joinWith "\n" items')
+
+summarizeLineRanges :: Array LineRange -> Maybe LineRange
+summarizeLineRanges = foldl
+  ( \acc { lineStart, lineEnd } -> case acc of
+      Just { lineStart: accLineStart, lineEnd: accLineEnd } -> Just { lineStart: min accLineStart lineStart, lineEnd: max accLineEnd lineEnd }
+      Nothing -> Just { lineStart, lineEnd }
+  )
+  Nothing
+
+mkFileLink :: FilePath -> Maybe LineRange -> String
+mkFileLink filePath lr =
+  let
+    rangePart = case lr of
+      Just { lineStart, lineEnd } -> "#L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
+      Nothing -> ""
+  in
+    "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePart <> "\">" <> filePath <> "</a></sup></p>"
 
 --- Codecs
 
@@ -536,8 +560,19 @@ fieldCompose codec1 codec2 = CA.codec dec enc
 
 --- Utils
 
-printTokens :: forall a. TokensOf a => a -> String
-printTokens cst = printTokenList (tokensOf cst)
+printTokens :: forall a. TokensOf a => RangeOf a => a -> { content :: String, lineRange :: LineRange }
+printTokens cst =
+  { content: printTokenList (tokensOf cst)
+  , lineRange: sourceRangeToLineRange (rangeOf cst)
+  }
+
+addContent :: String -> { content :: String, lineRange :: LineRange } -> { content :: String, lineRange :: LineRange }
+addContent str { content, lineRange } = { content: content <> str, lineRange }
+
+sourceRangeToLineRange :: CST.SourceRange -> LineRange
+sourceRangeToLineRange { start, end } = { lineStart: start.line, lineEnd: end.line }
+
+type LineRange = { lineStart :: Int, lineEnd :: Int }
 
 printTokenList :: TokenList -> String
 printTokenList tokenList =
@@ -545,6 +580,7 @@ printTokenList tokenList =
     sourceTokens =
       TokenList.toArray tokenList
         # Array.modifyAtIndices [ 0 ] (\r -> r { leadingComments = [] })
+
   in
     foldMap Print.printSourceToken sourceTokens
       # Str.trim
