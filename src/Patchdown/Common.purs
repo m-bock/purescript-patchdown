@@ -3,6 +3,8 @@ module Patchdown.Common
   , ConvertResult
   , Converter
   , ConverterFields
+  , logDebug
+  , logDebug_
   , logError
   , logError_
   , logImpl
@@ -78,6 +80,12 @@ logInfo tag msg val = Console.log $ logImpl tag msg (Just $ encodeJson val)
 
 logInfo_ :: forall m. MonadEffect m => String -> String -> m Unit
 logInfo_ tag msg = Console.log $ logImpl tag msg Nothing
+
+logDebug :: forall m a. MonadEffect m => EncodeJson a => String -> String -> a -> m Unit
+logDebug tag msg val = pure unit
+
+logDebug_ :: forall m. MonadEffect m => String -> String -> m Unit
+logDebug_ tag msg = pure unit
 
 logError :: forall m a. MonadEffect m => EncodeJson a => String -> String -> a -> m Unit
 logError tag msg val = Console.log $ logImpl tag msg (Just $ encodeJson val)

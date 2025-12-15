@@ -49,6 +49,7 @@ import PureScript.CST.Print as Print
 import PureScript.CST.Range (class RangeOf, class TokensOf, rangeOf, tokensOf)
 import PureScript.CST.Range.TokenList (TokenList)
 import PureScript.CST.Range.TokenList as TokenList
+import PureScript.CST.Types (Type(..))
 import PureScript.CST.Types as CST
 import Record as Record
 import Type.Prelude (Proxy(..))
@@ -113,7 +114,8 @@ data Pick
       { name :: String, stripImport :: Boolean }
   | PickValue
       { name :: String }
-
+  | PickInstance
+      { className :: String, typeName :: String }
   | PickExtraTypeRecord
       { name :: String }
 
@@ -249,6 +251,23 @@ matchOnePick pick decl = case pick of
       | name == getNameIdent r.name -> [ printTokens all # addContent "\n" ]
     _ -> []
 
+  PickInstance { className, typeName } -> case decl of
+    SrcDecl
+      all@
+        ( CST.DeclInstanceChain
+            ( CST.Separated
+                { head: CST.Instance
+                    { head:
+                        { className: c
+                        , types: [ CST.TypeConstructor t ]
+                        }
+                    }
+                }
+            )
+        )
+      | className == getQualNameProper c && typeName == getQualNameProper t -> [ printTokens all # addContent "\n" ]
+    _ -> []
+
   PickExtraTypeRecord { name } -> [] -- TODO3
 
   PickExtraValueAndSignature { name } ->
@@ -358,7 +377,7 @@ mkFileLink filePath lr =
       Just { lineStart, lineEnd } -> " L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
       Nothing -> ""
   in
-    "\n\n<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a></sup></p>"
+    "<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a></sup></p>\n"
 
 --- Codecs
 
@@ -480,6 +499,10 @@ jpropCodecPick = sumFlatWith'
         # fieldWithDefault @"stripImport" false
   , "PickValue": CAR.record
       { name: CA.string
+      }
+  , "PickInstance": CAR.record
+      { className: CA.string
+      , typeName: CA.string
       }
   , "PickExtraTypeRecord": CAR.record
       { name: CA.string
@@ -603,6 +626,9 @@ oneOrMany c = altDec (map Array.singleton <<< CA.decode c) (CA.array c)
 
 getNameProper :: CST.Name CST.Proper -> String
 getNameProper (CST.Name { name: CST.Proper name }) = name
+
+getQualNameProper :: CST.QualifiedName CST.Proper -> String
+getQualNameProper (CST.QualifiedName { name: CST.Proper name }) = name
 
 getNameIdent :: CST.Name CST.Ident -> String
 getNameIdent (CST.Name { name: CST.Ident name }) = name

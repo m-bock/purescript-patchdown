@@ -34,7 +34,7 @@ import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Node.Process as Process
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (ConvertError, Converter, logInfo, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (ConvertError, Converter, logDebug, logInfo, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -122,16 +122,16 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
       # lmap (\err -> InvalidOptions { json, err })
       # liftEither
 
-    logInfo tag "parsed converter options" { name, opts: printOpts opts }
+    logDebug tag "parsed converter options" { name, opts: printOpts opts }
 
     let newYamlStr = printYaml $ CA.encode codecJson opts
 
     { content, errors } <-
       if enable then do
-        logInfo tag "run converter" { name }
+        logDebug tag "run converter" { name }
         convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
       else do
-        logInfo tag "skip converter" { name }
+        logDebug tag "skip converter" { name }
         pure { content: "", errors: [] }
 
     pure
@@ -142,7 +142,7 @@ run { filePath, converters } = do
   let converterMap = converters # map (\c -> runConverter c _.name /\ c) # Map.fromFoldable
   let converterNames = Map.keys converterMap
 
-  logInfo tag "start" { filePath, converterNames }
+  logDebug tag "start" { filePath, converterNames }
 
   fileContent <- readTextFile UTF8 filePath
 
