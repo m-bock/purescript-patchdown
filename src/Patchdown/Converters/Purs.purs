@@ -12,7 +12,6 @@ import Data.Argonaut.Core (Json)
 import Data.Argonaut.Encode.Class (class EncodeJson, encodeJson)
 import Data.Array (mapMaybe)
 import Data.Array as Array
-import Data.Codec (Codec, Codec')
 import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
@@ -29,7 +28,6 @@ import Data.Show.Generic (genericShow)
 import Data.String (Pattern(..), Replacement(..), replace)
 import Data.String as Str
 import Data.String.Extra (snakeCase)
-import Data.Symbol (class IsSymbol)
 import Data.Traversable (for)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
@@ -41,15 +39,14 @@ import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
 import Node.Path (FilePath)
-import Patchdown.Common (ConvertError, Converter, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
-import Prim.Row (class Cons, class Union)
+import Patchdown.Common (ConvertError, Converter, fieldWithDefault, fieldWithDefaultSparse, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
+import Prim.Row (class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
 import PureScript.CST.Range (class RangeOf, class TokensOf, rangeOf, tokensOf)
 import PureScript.CST.Range.TokenList (TokenList)
 import PureScript.CST.Range.TokenList as TokenList
-import PureScript.CST.Types (Type(..))
 import PureScript.CST.Types as CST
 import Record as Record
 import Type.Prelude (Proxy(..))
@@ -91,6 +88,7 @@ type Opts =
   , inline :: Boolean
   , split :: Boolean
   , pick :: Array PickItem
+  , maxLines :: Maybe Int
   }
 
 type PickItem =
@@ -356,7 +354,19 @@ convert cache { opts: opts@{ pick } } = do
       Just filePath -> c <> mkFileLink filePath lineRange
       Nothing -> c
 
-  pure $ addFileLink $ wrapNl $ wrapNl $ wrapOuter (Str.joinWith "\n" items')
+    cutLines content = case opts.maxLines of
+      Just maxLines ->
+        let
+          lines = Str.split (Pattern "\n") content
+          omittedLinesCount = Array.length lines - maxLines
+        in
+          lines
+            # Array.take maxLines
+            # Str.joinWith "\n"
+            # \c -> c <> "\n\n" <> "-- And so on ... (" <> show omittedLinesCount <> " lines omitted)"
+      Nothing -> content
+
+  pure $ addFileLink $ wrapNl $ wrapNl $ wrapOuter $ cutLines $ Str.joinWith "\n" items'
 
 summarizeLineRanges :: Array LineRange -> Maybe LineRange
 summarizeLineRanges = foldl
@@ -388,6 +398,7 @@ codecOpts = CA.object "Opts" $
     , pick: CAR.optional (oneOrMany codecPickItemShorthand)
     , inline: CAR.optional CA.boolean
     , split: CAR.optional CA.boolean
+    , maxLines: CAR.optional CA.int
     }
     # fieldWithDefaultSparse @"split" false not
     # fieldWithDefaultSparse @"inline" false not
@@ -517,73 +528,6 @@ jpropCodecPick = sumFlatWith'
       { name: CA.string
       }
   }
-
----
-
-fieldWithDefaultSparse
-  :: forall @sym m x r r' t a b
-   . IsSymbol sym
-  => Monad m
-  => Cons sym (Maybe x) t r
-  => Cons sym x t r'
-  => x
-  -> (x -> Boolean)
-  -> Codec m a b (Record r) (Record r)
-  -> Codec m a b (Record r') (Record r')
-fieldWithDefaultSparse defDec shouldNotEncode = fieldDimap @sym
-  (\val -> if shouldNotEncode val then Nothing else Just val)
-  (fromMaybe defDec)
-
-fieldWithDefault
-  :: forall @sym m x r r' t a b
-   . IsSymbol sym
-  => Monad m
-  => Cons sym (Maybe x) t r
-  => Cons sym x t r'
-  => x
-  -> Codec m a b (Record r) (Record r)
-  -> Codec m a b (Record r') (Record r')
-fieldWithDefault defDec = fieldDimap @sym Just (fromMaybe defDec)
-
-fieldDimap
-  :: forall @sym m x y r r' t a b
-   . IsSymbol sym
-  => Monad m
-  => Cons sym x t r
-  => Cons sym y t r'
-  => (y -> x)
-  -> (x -> y)
-  -> Codec m a b (Record r) (Record r)
-  -> Codec m a b (Record r') (Record r')
-fieldDimap f1 f2 codec = fieldCompose @sym (CA.codec' (f2 >>> pure) f1) codec
-
-fieldCompose
-  :: forall @sym m x y r r' t a b
-   . Monad m
-  => IsSymbol sym
-  => Cons sym x t r
-  => Cons sym y t r'
-  => Codec' m x y
-  -> Codec m a b (Record r) (Record r)
-  -> Codec m a b (Record r') (Record r')
-fieldCompose codec1 codec2 = CA.codec dec enc
-  where
-  prx = Proxy :: Proxy sym
-
-  dec :: a -> m (Record r')
-  dec j = do
-    rec :: Record r <- CA.decode codec2 j
-    let val = Record.get prx rec :: x
-    val' :: y <- CA.decode codec1 val
-    let rec' = Record.set prx val' rec :: Record r'
-    pure rec'
-
-  enc :: Record r' -> b
-  enc r =
-    let
-      rec = Record.modify prx (CA.encode codec1) r :: Record r
-    in
-      CA.encode codec2 rec
 
 --- Utils
 
