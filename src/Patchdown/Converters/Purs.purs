@@ -387,7 +387,18 @@ mkFileLink filePath lr =
       Just { lineStart, lineEnd } -> " L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
       Nothing -> ""
   in
-    "<p align=\"right\"><sup>🗎 <a href=\"" <> filePath <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a></sup></p>\n"
+    Str.joinWith "\n"
+      [ "<p align=\"right\">"
+      , "  <sup"
+      , "    >🗎"
+      , "    <a href=\"" <> filePath <> rangePartLink <> "\""
+      , "      >" <> filePath <> rangePartLabel <> "</a"
+      , "    >"
+      , "  </sup>"
+      , "</p>"
+      , ""
+      , ""
+      ]
 
 --- Codecs
 
