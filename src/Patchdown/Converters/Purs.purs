@@ -52,6 +52,12 @@ import Record as Record
 import Type.Prelude (Proxy(..))
 import Unsafe.Coerce (unsafeCoerce)
 
+type Url = String
+
+type PursConfig =
+  { baseUrl :: Maybe Url
+  }
+
 --- Cache
 
 type Cache = { getCst :: String -> Effect (Array Source) }
@@ -297,19 +303,19 @@ matchOnePick pick decl = case pick of
 matchManyPicks :: Array Pick -> Source -> Array { content :: String, lineRange :: LineRange }
 matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 
-mkConverterPurs :: Effect Converter
-mkConverterPurs = do
+mkConverterPurs :: PursConfig -> Effect Converter
+mkConverterPurs config = do
   cache <- mkCache
-  pure $ converterPurs cache
+  pure $ converterPurs cache config
 
-converterPurs :: Cache -> Converter
-converterPurs cache = mkConverter
+converterPurs :: Cache -> PursConfig -> Converter
+converterPurs cache config = mkConverter
   { name: "purs"
   , description: "PureScript identifier converter"
   , codecJson: codecOpts
   , printOpts: show
   , convert: \opts -> do
-      (content /\ errors) <- runWriterT $ convert cache opts
+      (content /\ errors) <- runWriterT $ convert cache config opts
       pure { content, errors }
   }
 
@@ -322,8 +328,8 @@ getWrapFn { split, inline } =
     , wrapOuter: if split then identity else wrapFn
     }
 
-convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
-convert cache { opts: opts@{ pick } } = do
+convert :: Cache -> PursConfig -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
+convert cache config { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
   items :: (Array { lineRange :: Maybe LineRange, content :: String }) <- for pick
@@ -351,7 +357,7 @@ convert cache { opts: opts@{ pick } } = do
     lineRange = summarizeLineRanges (mapMaybe _.lineRange items)
     items' = map _.content items
     addFileLink c = case opts.filePath of
-      Just filePath -> c <> mkFileLink filePath lineRange
+      Just filePath -> c <> mkFileLink filePath config.baseUrl lineRange
       Nothing -> c
 
     cutLines content = case opts.maxLines of
@@ -376,9 +382,13 @@ summarizeLineRanges = foldl
   )
   Nothing
 
-mkFileLink :: FilePath -> Maybe LineRange -> String
-mkFileLink filePath lr =
+mkFileLink :: FilePath -> Maybe Url -> Maybe LineRange -> String
+mkFileLink filePath baseUrl lr =
   let
+    url = case baseUrl of
+      Just u -> u <> "/" <> filePath
+      Nothing -> filePath
+
     rangePartLink = case lr of
       Just { lineStart, lineEnd } -> "#L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
       Nothing -> ""
@@ -391,9 +401,7 @@ mkFileLink filePath lr =
       [ "<p align=\"right\">"
       , "  <sup"
       , "    >🗎"
-      , "    <a href=\"" <> filePath <> rangePartLink <> "\""
-      , "      >" <> filePath <> rangePartLabel <> "</a"
-      , "    >"
+      , "    <a href=\"" <> url <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a>"
       , "  </sup>"
       , "</p>"
       , ""

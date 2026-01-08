@@ -34,7 +34,7 @@ import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Node.Process as Process
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (ConvertError, Converter, logDebug, logInfo, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (ConvertError, Converter, logDebug, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -187,7 +187,10 @@ main = do
   filePath <- lookupEnv "PATCHDOWN_FILE_PATH"
     # map (fromMaybe' \_ -> unsafeCrashWith "PATCHDOWN_FILE_PATH not set")
 
+  baseUrl <- lookupEnv "PATCHDOWN_BASE_URL"
+
   pursConverter <- mkConverterPurs
+    { baseUrl }
 
   let converters = [ pursConverter ] <> [ converterRaw ]
 
