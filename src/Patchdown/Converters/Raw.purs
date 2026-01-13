@@ -27,7 +27,7 @@ converterRaw = mkConverter
 convert :: Opts -> Effect ConvertResult
 convert { filePath, wrapNl } = do
   content <- readTextFile UTF8 filePath
-  let content' = if wrapNl then "\n" <> content <> "\n" else content
+  let content' = if wrapNl then "\n\n" <> content <> "\n" else content
   pure { content: content', errors: [] }
 
 codecOpts :: JsonCodec Opts

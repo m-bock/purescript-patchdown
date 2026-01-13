@@ -2,7 +2,11 @@ module Patchdown.Common
   ( ConvertError
   , ConvertResult
   , Converter
+  , ConverterContext
   , ConverterFields
+  , fieldDimap
+  , fieldWithDefault
+  , fieldWithDefaultSparse
   , logDebug
   , logDebug_
   , logError
@@ -22,9 +26,6 @@ module Patchdown.Common
   , printYaml
   , runConverter
   , yamlToJson
-  , fieldWithDefault
-  , fieldDimap
-  , fieldWithDefaultSparse
   ) where
 
 import Prelude
@@ -50,6 +51,10 @@ import Type.Prelude (Proxy(..))
 
 --- Converter
 
+type ConverterContext =
+  { filePath :: String
+  }
+
 newtype MkConverter a = MkConverter (ConverterFields a)
 
 type ConverterFields a =
@@ -57,7 +62,7 @@ type ConverterFields a =
   , description :: String
   , codecJson :: JsonCodec a
   , printOpts :: a -> String
-  , convert :: { opts :: a } -> Effect ConvertResult
+  , convert :: { opts :: a, context :: ConverterContext } -> Effect ConvertResult
   }
 
 type ConvertResult =

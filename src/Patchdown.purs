@@ -1,10 +1,13 @@
 module Patchdown
   ( main
-  , run
+  , mainWithConfig
+  , Config
+  , defaultConfig
   ) where
 
 import Prelude
 
+import Control.Alt ((<|>))
 import Control.Monad.Error.Class (class MonadError, liftEither, liftMaybe, throwError, try)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Argonaut.Core (Json)
@@ -17,13 +20,16 @@ import Data.Either (Either(..))
 import Data.Foldable (fold, sum)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe')
+import Data.Maybe (Maybe(..), maybe)
 import Data.Set (Set)
+import Data.String (Pattern(..))
 import Data.String as Str
 import Data.String.Regex (Regex, regex)
 import Data.String.Regex.Flags as RegFlags
+import Data.Traversable (for, sequence)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
+import Effect.Aff (Aff, launchAff_)
 import Effect.Class (class MonadEffect, liftEffect)
 import Effect.Class.Console (log)
 import Effect.Exception (Error, error, message)
@@ -31,20 +37,15 @@ import Effect.Ref as Ref
 import Effect.Uncurried (EffectFn2, EffectFn5, mkEffectFn2, runEffectFn5)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile, writeTextFile)
+import Node.Glob.Basic (expandGlobsCwd)
 import Node.Process (lookupEnv)
 import Node.Process as Process
-import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (ConvertError, Converter, logDebug, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
-import Patchdown.Converters.Purs (mkConverterPurs)
+import Patchdown.Common (ConvertError, Converter, ConverterContext, logDebug, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Converters.Purs (defaultPursConfig, mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
 tag :: String
 tag = "Patchdown"
-
-type Opts =
-  { filePath :: String
-  , converters :: Array Converter
-  }
 
 mkStartTag :: String -> String
 mkStartTag inner = "<!-- PD_START:" <> inner <> "-->"
@@ -54,10 +55,14 @@ endTag = "<!-- PD_END -->"
 
 regexPdSection :: Either String Regex
 regexPdSection = regex
-  (mkStartTag "([a-zA-Z0-9_]*)(\\!?)\\s([\\s\\S]*?)" <> "[\\s\\S]*?" <> endTag)
+  ((mkStartTag "([a-zA-Z0-9_]*)(\\!?)(\\s[\\s\\S]*?)") <> "[\\s\\S]*?" <> endTag)
   RegFlags.global
 
-type PdMatches = { converterName :: String, yamlStr :: String, enable :: Boolean }
+type PdMatches =
+  { converterName :: String
+  , yamlStr :: String
+  , enable :: Boolean
+  }
 
 data Err
   = InvalidYaml { err :: String }
@@ -109,8 +114,8 @@ parseMatches matches =
       Just { converterName, enable: exclam /= "!", yamlStr }
     _ -> Nothing
 
-getReplacement :: Map String Converter -> PdReplacementInputs -> ExceptT Err Effect PdReplacementOutputs
-getReplacement converterMap { converterName, yamlStr, enable } = do
+getReplacement :: ConverterContext -> Map String Converter -> PdReplacementInputs -> ExceptT Err Effect PdReplacementOutputs
+getReplacement context converterMap { converterName, yamlStr, enable } = do
   json <- yamlToJson yamlStr
     # mapErrEff \err -> InvalidYaml { err: message err }
 
@@ -124,12 +129,12 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
 
     logDebug tag "parsed converter options" { name, opts: printOpts opts }
 
-    let newYamlStr = printYaml $ CA.encode codecJson opts
+    let newYamlStr = yamlStr -- printYaml $ CA.encode codecJson opts
 
     { content, errors } <-
       if enable then do
         logDebug tag "run converter" { name }
-        convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
+        convert { opts, context } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
       else do
         logDebug tag "skip converter" { name }
         pure { content: "", errors: [] }
@@ -137,21 +142,34 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
     pure
       { newContent: content, newYamlStr, errors }
 
-run :: Opts -> Effect { countErrors :: Int }
-run { filePath, converters } = do
+runFiles :: Config -> Aff { countErrors :: Int }
+runFiles config = do
+  files <- expandGlobsCwd config.globs
+  converters <- liftEffect $ sequence config.mkConverters
+
+  results <- for (Array.fromFoldable files) \filePath -> do
+
+    let context = { filePath }
+
+    liftEffect $ runFile { context, converters }
+
+  pure { countErrors: sum $ map _.countErrors results }
+
+runFile :: { context :: ConverterContext, converters :: Array Converter } -> Effect { countErrors :: Int }
+runFile { context, converters } = do
   let converterMap = converters # map (\c -> runConverter c _.name /\ c) # Map.fromFoldable
   let converterNames = Map.keys converterMap
 
-  logDebug tag "start" { filePath, converterNames }
+  logDebug tag "start" { context, converterNames }
 
-  fileContent <- readTextFile UTF8 filePath
+  fileContent <- readTextFile UTF8 context.filePath
 
   { str: patchedFileContent, countErrors } <-
     replaceAllPdSections fileContent \opts -> do
-      ret <- runExceptT $ getReplacement converterMap opts
+      ret <- runExceptT $ getReplacement context converterMap opts
       pure $ mkPdReplacementOutputs opts { converterNames } ret
 
-  writeTextFile UTF8 filePath patchedFileContent
+  writeTextFile UTF8 context.filePath patchedFileContent
   pure { countErrors }
 
 mkPdReplacementOutputs
@@ -182,26 +200,49 @@ mkPdReplacementOutputs { yamlStr, converterName } { converterNames } = case _ of
     }
   Right val -> val
 
+type Config =
+  { baseUrl :: Maybe String
+  , globs :: Array String
+  , mkConverters :: Array (Effect Converter)
+  }
+
+defaultConfig :: Config
+defaultConfig =
+  { baseUrl: Nothing
+  , globs: [ "README.md" ]
+  , mkConverters: [ pure converterRaw, mkConverterPurs defaultPursConfig ]
+  }
+
+type EnvVars =
+  { "PATCHDOWN_GLOBS" :: Array String
+  }
+
+getEnvVars :: Effect EnvVars
+getEnvVars = do
+  globs <- lookupEnv "PATCHDOWN_GLOBS" <#> maybe [] (Str.split (Pattern ","))
+  pure
+    { "PATCHDOWN_GLOBS": globs
+    }
+
+mergeConfig :: { envVars :: EnvVars, userConfig :: Config } -> Config
+mergeConfig { envVars: e, userConfig: c } =
+  { baseUrl: c.baseUrl
+  , globs: e."PATCHDOWN_GLOBS" <|> c.globs
+  , mkConverters: c.mkConverters
+  }
+
 main :: Effect Unit
-main = do
-  filePath <- lookupEnv "PATCHDOWN_FILE_PATH"
-    # map (fromMaybe' \_ -> unsafeCrashWith "PATCHDOWN_FILE_PATH not set")
+main = mainWithConfig defaultConfig
 
-  baseUrl <- lookupEnv "PATCHDOWN_BASE_URL"
-
-  pursConverter <- mkConverterPurs
-    { baseUrl }
-
-  let converters = [ pursConverter ] <> [ converterRaw ]
-
-  let
-    opts = { filePath, converters }
-
-  { countErrors } <- run opts
-
-  unless (countErrors == 0) do
-    log $ "errors found: " <> show countErrors
-    Process.exit' 1
+mainWithConfig :: Config -> Effect Unit
+mainWithConfig userConfig = do
+  envVars <- getEnvVars
+  let config = mergeConfig { envVars, userConfig }
+  launchAff_ do
+    { countErrors } <- runFiles config
+    unless (countErrors == 0) do
+      log $ "errors found: " <> show countErrors
+      liftEffect $ Process.exit' 1
 
 -- Markdown
 
@@ -221,7 +262,7 @@ mdPdSection :: PdMatches -> PdReplacementOutputs -> String
 mdPdSection { converterName, enable } { newYamlStr, errors, newContent } =
   let
     startTag = mkStartTag
-      (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr)
+      (converterName <> (if enable then "" else "!") <> newYamlStr)
 
     errorBoxes = foldMap
       (\err -> mdErrorBox converterName (err.message) err.value)

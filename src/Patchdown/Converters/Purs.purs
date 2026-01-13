@@ -1,5 +1,10 @@
 module Patchdown.Converters.Purs
-  ( mkConverterPurs
+  ( FileLinkParams
+  , LineRange
+  , PursConfig
+  , Url
+  , defaultPursConfig
+  , mkConverterPurs
   ) where
 
 import Prelude
@@ -23,7 +28,7 @@ import Data.Generic.Rep (class Generic)
 import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Show.Generic (genericShow)
 import Data.String (Pattern(..), Replacement(..), replace)
 import Data.String as Str
@@ -39,7 +44,8 @@ import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
 import Node.Path (FilePath)
-import Patchdown.Common (ConvertError, Converter, fieldWithDefault, fieldWithDefaultSparse, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
+import Node.Process (lookupEnv)
+import Patchdown.Common (ConvertError, Converter, ConverterContext, fieldWithDefault, fieldWithDefaultSparse, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
 import Prim.Row (class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
@@ -54,9 +60,48 @@ import Unsafe.Coerce (unsafeCoerce)
 
 type Url = String
 
-type PursConfig =
+type FileLinkParams =
   { baseUrl :: Maybe Url
+  , filePath :: FilePath
+  , lineRange :: Maybe LineRange
+  , url :: Url
+  , label :: String
   }
+
+mkFileLinkParams :: { baseUrl :: Maybe Url, filePath :: FilePath, lineRange :: Maybe LineRange } -> FileLinkParams
+mkFileLinkParams { baseUrl, filePath, lineRange } =
+  let
+    lineRangeHuman = map (\lr -> lr + { lineStart: 1, lineEnd: 1 }) lineRange
+
+    urlPrefix = maybe "" (\u -> u <> "/") baseUrl
+    urlSuffix = maybe "" (\{ lineStart, lineEnd } -> "#L" <> show lineStart <> "-L" <> show lineEnd) lineRangeHuman
+
+    labelSuffix = maybe "" (\{ lineStart, lineEnd } -> " (lines " <> show lineStart <> "-" <> show lineEnd <> ")") lineRangeHuman
+
+    url = urlPrefix <> filePath <> urlSuffix
+    label = filePath <> labelSuffix
+  in
+
+    { baseUrl
+    , filePath
+    , lineRange
+    , url
+    , label
+    }
+
+type PursConfig =
+  { renderFileLink :: FileLinkParams -> String
+  , fileLinkBaseUrl :: Maybe Url
+  }
+
+defaultPursConfig :: PursConfig
+defaultPursConfig =
+  { renderFileLink: ghStyleHtmlFileLink
+  , fileLinkBaseUrl: Nothing
+  }
+
+ghStyleHtmlFileLink :: FileLinkParams -> String
+ghStyleHtmlFileLink { url, label } = "<a href=\"" <> url <> "\">" <> label <> "</a>"
 
 --- Cache
 
@@ -303,8 +348,27 @@ matchOnePick pick decl = case pick of
 matchManyPicks :: Array Pick -> Source -> Array { content :: String, lineRange :: LineRange }
 matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 
+type EnvVars =
+  { "PATCHDOWN_PURS_FILE_LINK_BASE_URL" :: Maybe Url
+  }
+
+getEnvVars :: Effect EnvVars
+getEnvVars = do
+  fileLinkBaseUrl <- lookupEnv "PATCHDOWN_PURS_FILE_LINK_BASE_URL"
+  pure
+    { "PATCHDOWN_PURS_FILE_LINK_BASE_URL": fileLinkBaseUrl
+    }
+
+mergeConfig :: { envVars :: EnvVars, userConfig :: PursConfig } -> PursConfig
+mergeConfig { envVars: e, userConfig: c } =
+  { fileLinkBaseUrl: e."PATCHDOWN_PURS_FILE_LINK_BASE_URL" <|> c.fileLinkBaseUrl
+  , renderFileLink: c.renderFileLink
+  }
+
 mkConverterPurs :: PursConfig -> Effect Converter
-mkConverterPurs config = do
+mkConverterPurs userConfig = do
+  envVars <- getEnvVars
+  let config = mergeConfig { envVars, userConfig }
   cache <- mkCache
   pure $ converterPurs cache config
 
@@ -328,7 +392,7 @@ getWrapFn { split, inline } =
     , wrapOuter: if split then identity else wrapFn
     }
 
-convert :: Cache -> PursConfig -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
+convert :: Cache -> PursConfig -> { opts :: Opts, context :: ConverterContext } -> WriterT (Array ConvertError) Effect String
 convert cache config { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
@@ -357,7 +421,11 @@ convert cache config { opts: opts@{ pick } } = do
     lineRange = summarizeLineRanges (mapMaybe _.lineRange items)
     items' = map _.content items
     addFileLink c = case opts.filePath of
-      Just filePath -> c <> mkFileLink filePath config.baseUrl lineRange
+      Just filePath ->
+        let
+          fileLinkParams = mkFileLinkParams { baseUrl: config.fileLinkBaseUrl, filePath, lineRange }
+        in
+          c <> config.renderFileLink fileLinkParams
       Nothing -> c
 
     cutLines content = case opts.maxLines of
@@ -381,32 +449,6 @@ summarizeLineRanges = foldl
       Nothing -> Just { lineStart, lineEnd }
   )
   Nothing
-
-mkFileLink :: FilePath -> Maybe Url -> Maybe LineRange -> String
-mkFileLink filePath baseUrl lr =
-  let
-    url = case baseUrl of
-      Just u -> u <> "/" <> filePath
-      Nothing -> filePath
-
-    rangePartLink = case lr of
-      Just { lineStart, lineEnd } -> "#L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
-      Nothing -> ""
-
-    rangePartLabel = case lr of
-      Just { lineStart, lineEnd } -> " L" <> show (lineStart + 1) <> "-L" <> show (lineEnd + 1)
-      Nothing -> ""
-  in
-    Str.joinWith "\n"
-      [ "<p align=\"right\">"
-      , "  <sup"
-      , "    >🗎"
-      , "    <a href=\"" <> url <> rangePartLink <> "\">" <> filePath <> rangePartLabel <> "</a>"
-      , "  </sup>"
-      , "</p>"
-      , ""
-      , ""
-      ]
 
 --- Codecs
 
