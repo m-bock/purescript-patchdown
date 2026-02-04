@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
+  "bin": "index.js",
   "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -16,6 +17,7 @@
     "spago": "^0.93.43"
   },
   "devDependencies": {
+    "gh-pages": "^6.3.0",
     "js-yaml": "^4.1.0"
   }
 }

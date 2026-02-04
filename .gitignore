@@ -2,8 +2,8 @@
 bower_components/
 node_modules/
 .pulp-cache/
-output/
-output-es/
+/output
+/output-es
 generated-docs/
 .psc-package/
 .psc*
@@ -11,3 +11,4 @@ generated-docs/
 .psa*
 .spago
 /tmp
+/dist
