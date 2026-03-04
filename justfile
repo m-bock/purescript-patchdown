@@ -12,5 +12,4 @@ build:
     cp package-lock.json -t dist
 
 deploy:
-    just build
     npx gh-pages -d dist -b dist
