@@ -3,6 +3,7 @@ import * as Data_Codec_Argonaut from "../Data.Codec.Argonaut/index.js";
 import * as Data_Codec_Argonaut_Record from "../Data.Codec.Argonaut.Record/index.js";
 import * as Data_Either from "../Data.Either/index.js";
 import * as Data_HeytingAlgebra from "../Data.HeytingAlgebra/index.js";
+import * as Data_Maybe from "../Data.Maybe/index.js";
 import * as Data_Show from "../Data.Show/index.js";
 import * as Node_Encoding from "../Node.Encoding/index.js";
 import * as Node_FS_Sync from "../Node.FS.Sync/index.js";
@@ -12,12 +13,25 @@ var wrapNlIsSymbol = {
         return "wrapNl";
     }
 };
+var suffixIsSymbol = {
+    reflectSymbol: function () {
+        return "suffix";
+    }
+};
+var prefixIsSymbol = {
+    reflectSymbol: function () {
+        return "prefix";
+    }
+};
 var filePathIsSymbol = {
     reflectSymbol: function () {
         return "filePath";
     }
 };
+var showMaybe = /* #__PURE__ */ Data_Maybe.showMaybe(Data_Show.showString);
 var convert = function (v) {
+    var suffix$prime = Data_Maybe.fromMaybe("")(v.suffix);
+    var prefix$prime = Data_Maybe.fromMaybe("")(v.prefix);
     return function __do() {
         var content = Node_FS_Sync.readTextFile(Node_Encoding.UTF8.value)(v.filePath)();
         var content$prime = (function () {
@@ -27,20 +41,22 @@ var convert = function (v) {
             return content;
         })();
         return {
-            content: content$prime,
+            content: prefix$prime + (content$prime + suffix$prime),
             errors: [  ]
         };
     };
 };
-var codecOpts = /* #__PURE__ */ Patchdown_Common.fieldWithDefaultSparse(wrapNlIsSymbol)(Data_Either.monadEither)()()(false)(/* #__PURE__ */ Data_HeytingAlgebra.not(Data_HeytingAlgebra.heytingAlgebraBoolean))(/* #__PURE__ */ Data_Codec_Argonaut_Record.object()(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecCons(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecConsOptional(Data_Codec_Argonaut_Record.rowListCodecNil)()()(wrapNlIsSymbol))()()(filePathIsSymbol))("Opts")({
+var codecOpts = /* #__PURE__ */ Patchdown_Common.fieldWithDefaultSparse(wrapNlIsSymbol)(Data_Either.monadEither)()()(false)(/* #__PURE__ */ Data_HeytingAlgebra.not(Data_HeytingAlgebra.heytingAlgebraBoolean))(/* #__PURE__ */ Data_Codec_Argonaut_Record.object()(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecCons(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecConsOptional(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecConsOptional(/* #__PURE__ */ Data_Codec_Argonaut_Record.rowListCodecConsOptional(Data_Codec_Argonaut_Record.rowListCodecNil)()()(wrapNlIsSymbol))()()(suffixIsSymbol))()()(prefixIsSymbol))()()(filePathIsSymbol))("Opts")({
     filePath: Data_Codec_Argonaut.string,
-    wrapNl: /* #__PURE__ */ Data_Codec_Argonaut_Record.optional(Data_Codec_Argonaut["boolean"])
+    wrapNl: /* #__PURE__ */ Data_Codec_Argonaut_Record.optional(Data_Codec_Argonaut["boolean"]),
+    prefix: /* #__PURE__ */ Data_Codec_Argonaut_Record.optional(Data_Codec_Argonaut.string),
+    suffix: /* #__PURE__ */ Data_Codec_Argonaut_Record.optional(Data_Codec_Argonaut.string)
 }));
 var converterRaw = /* #__PURE__ */ Patchdown_Common.mkConverter({
     name: "raw",
     description: "Raw converter",
     codecJson: codecOpts,
-    printOpts: /* #__PURE__ */ Data_Show.show(/* #__PURE__ */ Data_Show.showRecord()()(/* #__PURE__ */ Data_Show.showRecordFieldsCons(filePathIsSymbol)(/* #__PURE__ */ Data_Show.showRecordFieldsConsNil(wrapNlIsSymbol)(Data_Show.showBoolean))(Data_Show.showString))),
+    printOpts: /* #__PURE__ */ Data_Show.show(/* #__PURE__ */ Data_Show.showRecord()()(/* #__PURE__ */ Data_Show.showRecordFieldsCons(filePathIsSymbol)(/* #__PURE__ */ Data_Show.showRecordFieldsCons(prefixIsSymbol)(/* #__PURE__ */ Data_Show.showRecordFieldsCons(suffixIsSymbol)(/* #__PURE__ */ Data_Show.showRecordFieldsConsNil(wrapNlIsSymbol)(Data_Show.showBoolean))(showMaybe))(showMaybe))(Data_Show.showString))),
     convert: function (v) {
         return convert(v.opts);
     }
